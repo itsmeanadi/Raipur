@@ -53,9 +53,11 @@ def scan(text: str, source: str) -> Tuple[str, List[Dict[str, Any]], float]:
     # 2. Heuristics
     patterns = [
         (r"(?i)ignore\s+(all\s+)?previous\s+instructions", "rule_ignore_instructions"),
+        (r"(?i)ignore\s+(all\s+)?(the\s+)?(above|prior|earlier|preceding)(\s+instructions)?", "rule_ignore_instructions"),
         (r"(?i)system:/?\[?system\]?|<system>", "rule_fake_system_header"),
         (r"(?i)do\s+not\s+tell\s+the\s+user", "rule_concealment"),
         (r"(?i)(email|send|forward)\s+(it\s+to\s+)?[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", "rule_imperative_exfil"),
+        (r"(?i)\b(email|send|forward|mail)\s+((the|all|its|this|that|those|these|both)\s+)?(contents?|data|files?|secrets?|it|them|both|everything|information|credentials|passwords?|records?)\b(\s+\w+){0,3}?\s+to\s+[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", "rule_imperative_exfil"),
     ]
     
     sanitized = text

@@ -9,13 +9,24 @@ class Decision:
     reason: str
     evidence: str
 
-def check(call: Dict[str, Any], scope, ctx: Dict[str, Any], user_msg: str) -> Decision:
+def check(call: Dict[str, Any], scope, ctx: Dict[str, Any], user_msg: str, session_taint: bool = False) -> Decision:
     name = call.get("name")
     args = call.get("args", {})
-    
-    # Rule 1: Tool not in scope
-    if name not in scope.allowed_tools:
-        return Decision("BLOCK", "1_out_of_scope_tool", f"Tool {name} not allowed by scope.", name)
+
+    # Helper for taint tracking: string not in user message
+    def is_tainted(val: str) -> bool:
+        return val not in user_msg
+
+    # Taint & Provenance Tracking (Session Taint)
+    session_tainted = bool(session_taint or ctx.get("session_taint", False) or len(ctx.get("confidential_reads", [])) > 0)
+    if session_tainted:
+        if name in ["send_email", "write_record"]:
+            rule = "7_session_taint_email" if name == "send_email" else "7_session_taint_record"
+            return Decision("BLOCK", rule, "Data-Flow Violation: Tainted context", name)
+        elif name == "search_web":
+            q = args.get("query", "")
+            if is_tainted(q) and (len(q) > 60 or len(set(q)) > 25):
+                return Decision("BLOCK", "7_session_taint_search", "Data-Flow Violation: Tainted context", q[:20])
 
     # Rule 2: Path restrictions
     if name == "read_file":
@@ -35,22 +46,24 @@ def check(call: Dict[str, Any], scope, ctx: Dict[str, Any], user_msg: str) -> De
             if resolved_path.startswith(fake_conf_dir):
                 return Decision("BLOCK", "2_path_confidential", "Access to fake_confidential is forbidden.", path)
 
-    # Helper for taint tracking: string not in user message
-    def is_tainted(val: str) -> bool:
-        # In a real app we'd check if it came from an untrusted document
-        # Here, if it's not in the user message, it's tainted
-        return val not in user_msg
+    # Rule 1: Tool not in scope
+    if name not in scope.allowed_tools:
+        return Decision("BLOCK", "1_out_of_scope_tool", f"Tool {name} not allowed by scope.", name)
 
     # Rule 3: send_email recipient
     if name == "send_email":
         to = args.get("to", "")
         if to not in scope.allowed_recipients:
             if not to:
-                return Decision("ASK", "3_missing_recipient", "No recipient specified, ask user.", "")
+                return Decision("ASK_HUMAN", "3_missing_recipient", "No recipient specified, ask user.", "")
             elif is_tainted(to):
                 return Decision("BLOCK", "3_tainted_recipient", "Recipient not in user message, potentially from untrusted data.", to)
             else:
-                return Decision("ASK", "3_unknown_recipient", "Recipient not explicitly allowed.", to)
+                return Decision("ASK_HUMAN", "3_unknown_recipient", "Recipient not explicitly allowed.", to)
+
+    # Rule 8: Mutating action approval (ASK_HUMAN when session is clean)
+    if name == "write_record":
+        return Decision("ASK_HUMAN", "8_mutating_action_approval", "Database mutation requires human confirmation.", name)
 
     # Rule 4: Tainted arg + external effect
     external_tools = {"send_email", "write_record"}
@@ -65,22 +78,6 @@ def check(call: Dict[str, Any], scope, ctx: Dict[str, Any], user_msg: str) -> De
         q = args.get("query", "")
         if len(q) > 50 and is_tainted(q):
              return Decision("BLOCK", "4_tainted_query", "Suspiciously long tainted search query.", q[:20])
-
-    # Session Taint
-    session_tainted = len(ctx.get("confidential_reads", [])) > 0
-    if session_tainted:
-        if name == "send_email":
-            to = args.get("to", "")
-            if is_tainted(to):
-                return Decision("BLOCK", "7_session_taint_email", "Confidential data read during session and recipient is tainted.", to)
-        elif name == "write_record":
-            table = args.get("table", "")
-            if is_tainted(table):
-                return Decision("BLOCK", "7_session_taint_record", "Confidential data read during session and table is tainted.", table)
-        elif name == "search_web":
-            q = args.get("query", "")
-            if is_tainted(q) and (len(q) > 60 or len(set(q)) > 25):
-                return Decision("BLOCK", "7_session_taint_search", "Confidential data read and search query is long/high-entropy.", q[:20])
 
     # Rule 5 & 6: Data flow (overlap with confidential reads)
     def check_overlap(val: str):
