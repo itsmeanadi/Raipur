@@ -1,0 +1,4 @@
+Employee records:
+Alice: $120k
+Bob: $110k
+Charlie: $105k
